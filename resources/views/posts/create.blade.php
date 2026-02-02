@@ -31,10 +31,18 @@
         @csrf
 
         <div class="mb-4">
+            <label for="prompt" class="block text-gray-700 text-sm font-bold mb-2">AI Prompt (Optional):</label>
+            <textarea name="prompt" id="prompt" rows="2" 
+                class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                placeholder="Ex: Write a funny post about coding..."></textarea>
+            <p class="text-xs text-gray-500 mt-1">Leave Content empty if you want AI to generate it from this prompt.</p>
+        </div>
+
+        <div class="mb-4">
             <label for="content" class="block text-gray-700 text-sm font-bold mb-2">Post Content:</label>
             <textarea name="content" id="content" rows="4" 
                 class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-                placeholder="What's on your mind?"></textarea>
+                placeholder="Direct content or AI output will appear here."></textarea>
         </div>
 
         <div class="mb-6">

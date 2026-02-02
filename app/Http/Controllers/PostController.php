@@ -22,12 +22,18 @@ class PostController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'content' => 'required|string|max:2000',
+            'content' => 'nullable|string|max:2000',
+            'prompt' => 'nullable|string|max:1000',
             'schedule_at' => 'required|date|after:now',
         ]);
 
+        if (empty($validated['content']) && empty($validated['prompt'])) {
+             return back()->withErrors(['content' => 'Please provide either Content or an AI Prompt.']);
+        }
+
         Post::create([
             'content' => $validated['content'],
+            'prompt' => $validated['prompt'] ?? null,
             'schedule_at' => Carbon::parse($validated['schedule_at']),
             'is_posted' => false,
         ]);

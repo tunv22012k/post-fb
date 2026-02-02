@@ -40,4 +40,8 @@ return [
         'token' => env('FB_PAGE_ACCESS_TOKEN'),
     ],
 
+    'gemini' => [
+        'key' => env('GEMINI_API_KEY'),
+    ],
+
 ];

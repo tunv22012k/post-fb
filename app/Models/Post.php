@@ -12,6 +12,7 @@ class Post extends Model
 
     protected $fillable = [
         'content',
+        'prompt',
         'schedule_at',
         'is_posted',
         'fb_post_id',
