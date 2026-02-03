@@ -1,0 +1,10 @@
+
+/vendor
+/node_modules
+/public/storage
+/storage/*.key
+.env
+.git
+.phpunit.result.cache
+docker-compose.yml
+README.md
