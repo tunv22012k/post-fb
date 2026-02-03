@@ -124,63 +124,95 @@ Quản lý 1000+ Pages đòi hỏi quản lý Token cực kỳ chặt chẽ.
     *   Không được post 400 bài cùng 1 giây (Facebook sẽ khóa App).
     *   Sử dụng **Redis Rate Logic**: Giới hạn mỗi App chỉ được gọi API 200 req/giờ (hoặc theo quota của Facebook).
     *   Chia Batch: Mỗi phút chỉ nhả ra khoảng 20-50 bài post rải đều các Page khác nhau.
+*   **Quy Trình Xử Lý Đa Phương Tiện (Media Handling)**:
+    *   Hệ thống phân luồng dữ liệu thông minh: Các bài đăng chứa Ảnh/Video sẽ được đẩy qua hàng đợi ưu tiên (Priority Queue) để upload asset lấy `media_id` trước, đảm bảo khi gọi API `feed`, mọi tài nguyên đã sẵn sàng. Tránh lỗi upload timeout phổ biến khi file quá nặng.
+*   **Giám Sát Trạng Thái Real-time (Webhook Monitoring)**:
+    *   Thay vì treo connection chờ API phản hồi (gây nghẽn server), hệ thống sẽ hoạt động theo cơ chế "Fire-and-Forget" và lắng nghe **Meta Webhooks**. Khi Facebook xử lý xong video hoặc đăng bài thành công, họ sẽ bắn tín hiệu về endpoint của ta, giúp cập nhật trạng thái `Published` trên Dashboard tức thì.
 
 ### B. Đăng Bài Đa Nền Tảng (Multi-Domain)
-*   **WordPress**: Dùng **WordPress REST API** + Plugin "Application Passwords" để xác thực.
-*   **Custom Web**: Xây dựng API chuẩn nhận JSON (Webhooks).
-*   **Format**: Trước khi đẩy bài, hệ thống sẽ convert Markdown từ AI sang HTML chuẩn tương ứng với từng nền tảng (VD: WP cần HTML block, Web custom cần raw HTML).
+*   **Kiến trúc Driver/Adapter (Design Pattern)**:
+    *   Sử dụng **Adapter Pattern** để mở rộng không giới hạn các loại web đích. Hệ thống lõi gọi `CodeInterface->publish()`, còn các class con (`WordPressAdapter`, `CustomWebAdapter`) sẽ tự lo phần logic riêng.
+    *   **WordPress**: Tận dụng REST API kết hợp "Application Passwords". Adapter tự động map các field (Title, Content, Author, Category) vào endpoint tương ứng.
+    *   **Custom Web**: Gửi Webhook chứa payload JSON chuẩn hóa.
+*   **Chiến lược Đảm bảo Hiển thị (Formatting Consistency)**:
+    *   **Content Transformer**: Thay vì lưu HTML cứng, lưu nội dung dưới dạng **Markdown** hoặc **JSON Blocks**. Khi publish, Adapter sẽ convert sang định dạng đích (VD: WP nhận HTML Blocks, Web React nhận JSON raw).
+    *   **Asset Management (CDN)**: Để ảnh hiển thị đúng trên mọi domain, toàn bộ ảnh trong bài viết được host tại **Central S3/CDN**. Trong nội dung bài gửi đi chỉ chứa Absolute URL (Ví dụ: `https://cdn.mysystem.com/img1.jpg`), tránh việc ảnh bị lỗi 404 do relative path.
 
 ### C. AI Content Factory (Quy trình sản xuất)
 Luồng dữ liệu sẽ đi như một dây chuyền nhà máy:
 
 1.  **Input**: Người dùng ném 1 link bài báo hoặc 1 chủ đề.
-2.  **Phase 1 - AI Rewrite Dispatcher**:
-    *   Hệ thống tạo ra 5-10 Job rewrite song song (Mỗi job dùng 1 prompt khác nhau: "Hài hước", "Chuyên gia", "Tóm tắt"...).
-3.  **Phase 2 - Image Generator**:
-    *   Sau khi có Text -> Gọi tiếp DALL-E/Midjourney để tạo ảnh theo context bài viết.
-    *   Hoặc dùng tool Upscale ảnh cũ.
-4.  **Phase 3 - Staging (Human Review - Optional)**:
-    *   Bài viết trạng thái "Pending Approval".
-    *   Admin duyệt nhanh -> Bấm "Approve All" -> Đẩy vào hàng đợi phân phối.
+2.  **Phase 1 - AI Rewrite Dispatcher (Ensuring Uniqueness)**:
+    *   **Logic**: Hệ thống kích hoạt 5-10 Workers xử lý song song. Mỗi worker áp dụng một "Persona" khác nhau (KOL, Chuyên gia, GenZ).
+    *   **Kỹ thuật tránh Duplicate Content**: Sử dụng tham số `temperature: 0.8` và yêu cầu AI thay đổi cấu trúc câu (Active/Passive voice), bộ từ đồng nghĩa (Synonyms) để đảm bảo độ độc nhất ngôn ngữ (Linguistic Uniqueness) > 90%.
+3.  **Phase 2 - Image Enhancement**:
+    *   **Upscale/Generate**: Sau khi có Text, Worker phân tích từ khóa để gọi DALL-E 3 vẽ ảnh bìa mới HOẶC dùng AI Upscaler (Real-ESRGAN) để làm nét ảnh cũ.
+    *   **Watermark**: Tự động đóng dấu logo của từng Page lên ảnh để "chiếm hữu" bản quyền.
+4.  **Phase 3 - Staging & Approval**:
+    *   Mọi bài viết sinh ra sẽ ở trạng thái `WAITING_REVIEW`.
+    *   Giao diện Dashboard cho phép User xem trước (Preview) trên giả lập giao diện Facebook/Web. User có thể sửa nhanh tại chỗ trước khi bấm "Release to Queue".
 
 ---
 
 ## 3. Vận Hành Ổn Định & Mở Rộng (Reliability)
 
 ### A. Xử lý Hàng Đợi (Queue & Failures)
-*   **Vấn đề**: API Facebook chết, Server lag, Mạng đứt.
-*   **Giải pháp - Smart Retry**:
-    *   Nếu lỗi 5xx (Facebook sập): Thử lại sau 5 phút.
-    *   Nếu lỗi 4xx (Token chết): Dừng ngay, đánh dấu "Failed", báo Admin, không retry để tránh bị ban.
-    *   **Laravel Horizon**: Dùng công cụ này để có giao diện theo dõi trực quan xem Job nào đang chạy, Job nào fail, tốc độ tiêu thụ queue.
+Hệ thống sử dụng mô hình **Distributed Queue (Redis)** để chịu tải hàng triệu tasks.
 
-### B. Giám Sát (Monitoring)
-*   Tích hợp **Telegram/Slack Bot**:
-    *   "⚠️ Alert: 15 Posts failed on Page [Tên Page] due to Token Expired."
-    *   "✅ Success: Campaign [Tên] finished distributed to 450 pages."
+*   **Chiến lược Retry Thông Minh (Exponential Backoff)**:
+    *   *Câu hỏi*: Nếu Facebook sập (Lỗi 500/503) khi đang post 1000 bài thì sao?
+    *   *Giải pháp*: Không retry ngay lập tức (tránh spam API). Hệ thống sẽ đợi theo cấp số nhân: 1 phút, 5 phút, 15 phút, 1 giờ. Nếu vẫn lỗi -> Đẩy vào **Dead Letter Queue (DLQ)** để Admin kiểm tra sau.
+*   **Cơ chế Ngắt Mạch (Circuit Breaker)**:
+    *   Nếu phát hiện tỷ lệ lỗi > 30% liên tiếp cho một Page/API cụ thể, hệ thống tự động "ngắt cầu dao" (Pause Queue) cho kênh đó trong 30 phút. Việc này ngăn chặn việc lãng phí tài nguyên và bảo vệ tài khoản khỏi bị Facebook đánh dấu spam do lỗi liên tục.
+*   **Monitoring (Laravel Horizon)**:
+    *   Dashboard theo dõi thời gian thực: Tốc độ xử lý (Throughput), Job thất bại. Tự động Auto-scale số lượng Workers đưa vào lượng job tồn đọng (Queue backlog).
 
-### C. Bảo Mật (Security)
-*   **Vault**: Token Facebook là tài sản quý nhất.
-    *   Sử dụng `App Encryption` của Laravel (AES-256) để mã hóa cột Token trong DB. Cho dù hacker dump được DB cũng không lấy được token raw.
-    *   IP Whitelist: API đăng bài chỉ nhận request từ IP Server của bạn.
+### B. Giám Sát Dành Cho Người Dùng (Non-Technical Monitoring)
+*   **Giao diện Trực quan (Traffic Light System)**:
+    *   Sử dụng mã màu đơn giản trên Dashboard: Màu xanh (Ổn định), Màu vàng (Token sắp hết hạn), Màu đỏ (Mất kết nối/Lỗi).
+    *   **Widget "Cần xử lý ngay"**: Hiển thị to, rõ danh sách các Page bị ngắt kết nối với nút bấm **"Reconnect Facebook"** để user bấm vào sửa ngay mà không cần gọi IT.
+*   **Trung tâm Thông báo (Notification Center)**:
+    *   Biểu tượng chuông báo trên góc màn hình: "Bài viết #123 thất bại trên 5 Page. Lý do: Ảnh quá khổ".
+    *   **Email Report**: Gửi báo cáo tổng hợp vào 8:00 sáng mỗi ngày cho Quản lý ("Hôm qua: 980 bài thành công, 20 bài lỗi").
+*   **Kênh Kỹ thuật (Backend Logs)**:
+    *   Tích hợp Telegram/Slack Bot để báo lỗi hệ thống 500/Timeout cho đội Dev.
+
+### C. Bảo Mật (Security - The Vault)
+*   **Mã Hóa Đa Lớp (Encryption at Rest)**:
+    *   Sử dụng Laravel Encrypter (AES-256-CBC) để mã hóa toàn bộ Token trong Database.
+    *   **Key Rotation**: Khóa giải mã `APP_KEY` không lưu cứng trong code, mà được inject qua biến môi trường (Environment Variable) an toàn trên Server.
+*   **Phân Quyền (RBAC)**:
+    *   Chỉ user có quyền `SUPER_ADMIN` mới được phép xem danh sách Token hoặc kết nối Page mới.
+    *   Nhân viên viết bài (Editor) chỉ thấy tên Page, hoàn toàn không tiếp cận được Token gốc.
+*   **Audit Logging**:
+    *   Ghi lại mọi lịch sử truy cập nhạy cảm: "Ai vừa export danh sách token?", "Ai vừa xóa Page X?". Giúp truy vết sai phạm (Accountability).
 
 ---
 
-## 4. Lộ Trình Triển Khai (Roadmap)
+## 4. Tổng Kết & Bàn Giao (Deliverables)
 
-### Giai Đoạn 1: MVP (Core System) - 2 Tuần
-*   Dựng Database quản lý tập trung Pages & Domains.
-*   Module "Add Page" (Lưu Token vào DB).
-*   Module "AI Write": Input đơn giản -> Gọi Gemini -> Ra text.
-*   Module "Manual Post": Chọn 1 bài -> Chọn 5 Page -> Bấm Post -> Chạy Async Queue.
+### A. Mô Tả Luồng Đi Dữ Liệu (Visual Workflow)
+*Hành trình của một bài viết từ khi là Ý tưởng đến khi Xuất bản:*
+1.  **Draft**: User nhập link bài báo gốc (Dân Trí/VNExpress) vào Dashboard.
+2.  **Factory Processing**:
+    *   --> AI Worker 1: Viết lại thành bài "Hài hước".
+    *   --> AI Worker 2: Viết lại thành bài "Nghiêm túc".
+    *   --> Image Worker: Sinh ảnh bìa mới + Đóng dấu Logo.
+3.  **Staging**: 2 biến thể bài viết nằm ở trạng thái `WAITING`. User duyệt nhanh.
+4.  **Distribution Queue**:
+    *   --> Job 1: Đẩy sang Fanpage A (Lúc 8:00).
+    *   --> Job 2: Đẩy sang Website B (Lúc 8:05).
+5.  **Published**: Hệ thống nhận Webhook báo "Thành công" -> Đổi màu xanh trên Dashboard.
 
-### Giai Đoạn 2: Automation & Scaling - 3 Tuần
-*   Xây dựng "Content Factory": Tự động rewrite ra nhiều bản.
-*   Tích hợp Image Gen API.
-*   Xây dựng Lập lịch (Scheduler UI): Kéo thả lịch đăng bài.
-*   Cài đặt Rate Limiting (Để không bị FB chặn khi post nhiều).
+### B. Danh Sách Công Cụ & Dịch Vụ (Tooling & Services)
+*   **Infrastructure**: AWS EC2 (Server), AWS RDS (Database), AWS S3 (Lưu ảnh), Redis (Queue).
+*   **AI Services**: OpenAI GPT-4o (Viết bài), Midjourney/DALL-E 3 (Vẽ ảnh).
+*   **Libraries (Laravel)**:
+    *   `laravel/horizon`: Quản lý Queue UI.
+    *   `spatie/laravel-permission`: Quản lý phân quyền (RBAC).
+    *   `facebook/graph-sdk`: Driver kết nối Meta API.
 
-### Giai Đoạn 3: Enterprise Features - 3 Tuần
-*   Dashboard Analytics: Thống kê Like/Comment tổng hợp từ 1000 Page về 1 chỗ.
-*   Auto-Reply Comment (Dùng AI trả lời comment trên 1000 page).
-*   Quy trình duyệt bài nhiều lớp (Nhân viên viết -> Sếp duyệt -> Máy đăng).
+### C. Lộ Trình Triển Khai (3 Phases Roadmap)
+*   **Phase 1: MVP (Core System)**: Chạy được luồng đơn giản (Nguyên liệu -> AI -> Post thủ công lên 1 Page). Mục tiêu: Chứng minh kỹ thuật (Proof of Concept).
+*   **Phase 2: Automation (Content Factory)**: Tự động sinh hàng loạt và lập lịch. Xây dựng cơ chế Queue & Retry. Mục tiêu: Giảm tải con người.
+*   **Phase 3: Scaling (Enterprise)**: Monitoring, Circuit Breaker, Analytics tập trung 1000 Pages. Mục tiêu: Ổn định và Báo cáo.
