@@ -12,5 +12,6 @@ Route::post('/posts', [PostController::class, 'store'])->name('posts.store');
 
 Route::get('/run-schedule', function () {
     \Illuminate\Support\Facades\Artisan::call('schedule:run');
-    return 'Scheduler executed';
+    $output = \Illuminate\Support\Facades\Artisan::output();
+    return response($output, 200)->header('Content-Type', 'text/plain');
 });
