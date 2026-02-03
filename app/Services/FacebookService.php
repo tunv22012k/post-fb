@@ -34,7 +34,12 @@ class FacebookService
         $url = "https://graph.facebook.com/{$this->graphVersion}/{$this->pageId}/feed";
 
         try {
-            $response = Http::withoutVerifying()->post($url, [
+            $response = Http::withOptions([
+                'verify' => false,
+                'timeout' => 60,
+                'connect_timeout' => 60,
+                'force_ip_resolve' => 'v4',
+            ])->post($url, [
                 'message' => $content,
                 'access_token' => $this->accessToken,
             ]);
