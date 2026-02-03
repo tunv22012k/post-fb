@@ -60,7 +60,7 @@ return [
 
         'facebook' => [
             'driver' => 'single',
-            'path' => storage_path('logs/facebook.log'),
+            'path' => env('APP_ENV') === 'local' ? storage_path('logs/facebook.log') : 'php://stderr',
             'level' => 'debug',
         ],
 
