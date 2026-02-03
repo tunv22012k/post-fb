@@ -15,3 +15,9 @@ Route::get('/run-schedule', function () {
     $output = \Illuminate\Support\Facades\Artisan::output();
     return response($output, 200)->header('Content-Type', 'text/plain');
 });
+
+Route::get('/test-facebook', function () {
+    \Illuminate\Support\Facades\Artisan::call('facebook:post');
+    $output = \Illuminate\Support\Facades\Artisan::output();
+    return response($output, 200)->header('Content-Type', 'text/plain');
+});
