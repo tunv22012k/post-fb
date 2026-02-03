@@ -14,8 +14,8 @@ class FacebookService
 
     public function __construct()
     {
-        $this->pageId = config('services.facebook.page_id') ?? env('FB_PAGE_ID');
-        $this->accessToken = config('services.facebook.token') ?? env('FB_PAGE_ACCESS_TOKEN');
+        $this->pageId = config('services.facebook.page_id') ?? env('FB_PAGE_ID') ?? '';
+        $this->accessToken = config('services.facebook.token') ?? env('FB_PAGE_ACCESS_TOKEN') ?? '';
     }
 
     /**
