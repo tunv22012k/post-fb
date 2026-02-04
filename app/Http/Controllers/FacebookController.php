@@ -28,26 +28,41 @@ class FacebookController extends Controller
     public function handleFacebookCallback()
     {
         try {
+            \Illuminate\Support\Facades\Log::info('Facebook Callback Started');
             $socialUser = Socialite::driver('facebook')->user();
+            \Illuminate\Support\Facades\Log::info('Social User retrieved', ['id' => $socialUser->id, 'name' => $socialUser->name]);
+            
             $shortToken = $socialUser->token;
 
             // 1. Exchange for Long-Lived Token (60 days)
             $longToken = $this->facebookService->exchangeToken($shortToken);
+            \Illuminate\Support\Facades\Log::info('Long Lived Token exchanged');
 
             // 2. Bulk Fetch Pages (Tokens will be Permanent/Long-Lived)
             $pages = $this->facebookService->getPages($longToken);
+            \Illuminate\Support\Facades\Log::info('Pages fetched', ['count' => count($pages), 'data' => $pages]);
 
             // 3. Save to DB
             $user = Auth::user(); 
             
-            // DEMO ONLY: If not logged in, just pick the first user to make it work for demo purposes
+            // Auto-login or Create User logic
             if (!$user) {
+                // Try to find first user
                 $user = User::first();
-                if ($user) Auth::login($user);
-            }
 
-            if (!$user) {
-                 return redirect('/')->with('error', 'Demo Error: No user found in DB. Please register a user first.');
+                // If no user exists in DB, create one
+                if (!$user) {
+                    $user = User::create([
+                        'name' => $socialUser->name ?? 'Facebook User',
+                        'email' => $socialUser->email ?? $socialUser->id . '@facebook.local',
+                        'password' => \Illuminate\Support\Facades\Hash::make('password'),
+                        'email_verified_at' => now(),
+                    ]);
+                    \Illuminate\Support\Facades\Log::info('Created new user', ['id' => $user->id]);
+                }
+                
+                Auth::login($user);
+                \Illuminate\Support\Facades\Log::info('Auto-logged in user', ['id' => $user->id]);
             }
 
             $count = 0;
@@ -65,10 +80,12 @@ class FacebookController extends Controller
                 );
                 $count++;
             }
+            \Illuminate\Support\Facades\Log::info('Pages saved', ['count' => $count]);
 
             return redirect('/dashboard')->with('success', "Success! Connected {$count} Pages using Bulk Onboarding.");
 
         } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Facebook Callback Error: ' . $e->getMessage());
             return redirect('/dashboard')->with('error', 'Error: ' . $e->getMessage());
         }
     }

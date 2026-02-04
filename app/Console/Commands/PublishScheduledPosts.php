@@ -40,62 +40,60 @@ class PublishScheduledPosts extends Command
      */
     public function handle()
     {
-        // Log::channel('facebook')->info('Scheduler started check.'); 
-        $this->info('Checking for scheduled posts...');
+        $this->info('Checking for scheduled jobs (PublicationJob)...');
 
-        $posts = Post::where('is_posted', false)
-            ->where('schedule_at', '<=', Carbon::now())
+        // Find jobs that are QUEUED and scheduled time has passed
+        $jobs = \App\Models\PublicationJob::with(['channel', 'variant'])
+            ->where('status', 'QUEUED')
+            ->where('scheduled_at', '<=', Carbon::now())
             ->get();
 
-        if ($posts->isEmpty()) {
-            $this->info('No posts ready based on schedule_at <= now.');
+        if ($jobs->isEmpty()) {
+            $this->info('No queued jobs ready based on scheduled_at <= now.');
             return;
         }
 
-        foreach ($posts as $post) {
-            Log::channel('facebook')->info("Starting to process Post ID: {$post->id}");
-            $this->processPost($post);
+        foreach ($jobs as $job) {
+            Log::channel('facebook')->info("Starting to process Job ID: {$job->id}");
+            $this->processJob($job);
         }
 
         $this->info('Batch processing completed.');
     }
 
-    protected function processPost(Post $post)
+    protected function processJob(\App\Models\PublicationJob $job)
     {
-        $this->info("Processing Post ID: {$post->id}");
+        $this->info("Processing Job ID: {$job->id} for Channel: {$job->channel->name}");
 
         try {
-            // Check if content is empty and needs generation from prompt
-            if (empty($post->content) && !empty($post->prompt)) {
-                $this->info("Generating content from prompt...");
-                Log::channel('facebook')->info("Generating content for Post ID: {$post->id} using Gemini.");
-                
-                $generatedContent = $this->geminiService->generateContent($post->prompt);
-                
-                Log::channel('facebook')->info("Gemini Generated Content for Post ID {$post->id}: \n" . $generatedContent);
+            $job->update(['status' => 'PUBLISHING']);
 
-                $post->update(['content' => $generatedContent]);
-                $this->info("Content generated successfully.");
+            $content = $job->variant->final_content;
+            $accessToken = $job->channel->access_token;
+
+            if (empty($content)) {
+                throw new \Exception("Content is empty.");
             }
 
-            // Ensure content exists before publishing
-            if (empty($post->content)) {
-                throw new \Exception("Post content is empty and no prompt available.");
-            }
+            // Publish using the specific Page's Access Token
+            $fbPostId = $this->facebookService->publishPostToPage($accessToken, $content);
 
-            $fbPostId = $this->facebookService->publishPost($post->content);
-
-            $post->update([
-                'is_posted' => true,
-                'fb_post_id' => $fbPostId,
+            $job->update([
+                'status' => 'PUBLISHED',
+                'platform_response_id' => $fbPostId,
+                'error_log' => null,
             ]);
 
             $this->info("Success! Published as FB ID: {$fbPostId}");
-            Log::channel('facebook')->info("Successfully published Post ID: {$post->id}. FB Post ID: {$fbPostId}");
+            Log::channel('facebook')->info("Successfully published Job ID: {$job->id}. FB Post ID: {$fbPostId}");
 
         } catch (\Exception $e) {
-            $this->error("Failed to publish Post ID {$post->id}: " . $e->getMessage());
-            Log::channel('facebook')->error("Failed to publish Post ID {$post->id}: " . $e->getMessage());
+            $job->update([
+                'status' => 'FAILED',
+                'error_log' => $e->getMessage(),
+            ]);
+            $this->error("Failed to publish Job ID {$job->id}: " . $e->getMessage());
+            Log::channel('facebook')->error("Failed to publish Job ID {$job->id}: " . $e->getMessage());
         }
     }
 }

@@ -22,7 +22,7 @@ class FacebookService
     public function exchangeToken(string $shortToken): string
     {
         // Use v19.0 as a stable version
-        $response = Http::get('https://graph.facebook.com/v19.0/oauth/access_token', [
+        $response = Http::withoutVerifying()->get('https://graph.facebook.com/v19.0/oauth/access_token', [
             'grant_type' => 'fb_exchange_token',
             'client_id' => $this->clientId,
             'client_secret' => $this->clientSecret,
@@ -41,7 +41,7 @@ class FacebookService
      */
     public function getPages(string $userAccessToken): array
     {
-        $response = Http::get('https://graph.facebook.com/v19.0/me/accounts', [
+        $response = Http::withoutVerifying()->get('https://graph.facebook.com/v19.0/me/accounts', [
             'access_token' => $userAccessToken,
             'limit' => 1000, // Fetch up to 1000 pages
         ]);
@@ -52,5 +52,21 @@ class FacebookService
 
         // Return array of pages (id, name, access_token...)
         return $response->json()['data'] ?? [];
+    }
+    /**
+     * Publish content to a specific Page
+     */
+    public function publishPostToPage(string $pageAccessToken, string $message): string
+    {
+        $response = Http::withoutVerifying()->post("https://graph.facebook.com/v19.0/me/feed", [
+            'access_token' => $pageAccessToken,
+            'message' => $message,
+        ]);
+
+        if ($response->failed()) {
+            throw new Exception('Publish to Page Failed: ' . $response->body());
+        }
+
+        return $response->json()['id']; // Returns "PageID_PostID"
     }
 }
