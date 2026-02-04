@@ -36,8 +36,9 @@ return [
     ],
 
     'facebook' => [
-        'page_id' => env('FB_PAGE_ID'),
-        'token' => env('FB_PAGE_ACCESS_TOKEN'),
+        'client_id' => env('FACEBOOK_CLIENT_ID'),
+        'client_secret' => env('FACEBOOK_CLIENT_SECRET'),
+        'redirect' => env('FACEBOOK_REDIRECT_URI'),
     ],
 
     'gemini' => [

@@ -3,66 +3,54 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
 use Exception;
 
 class FacebookService
 {
-    protected string $pageId;
-    protected string $accessToken;
-    protected string $graphVersion = 'v24.0';
+    protected string $clientId;
+    protected string $clientSecret;
 
     public function __construct()
     {
-        $this->pageId = config('services.facebook.page_id') ?? env('FB_PAGE_ID') ?? '';
-        $this->accessToken = config('services.facebook.token') ?? env('FB_PAGE_ACCESS_TOKEN') ?? '';
+        $this->clientId = config('services.facebook.client_id');
+        $this->clientSecret = config('services.facebook.client_secret');
     }
 
     /**
-     * Publish a post to the Facebook Page.
-     *
-     * @param string $content
-     * @return string The Facebook Post ID
-     * @throws Exception
+     * Exchange Short-Lived Token for Long-Lived Token (60 days)
      */
-    public function publishPost(string $content): string
+    public function exchangeToken(string $shortToken): string
     {
-        if (empty($this->pageId) || empty($this->accessToken)) {
-            throw new Exception('Facebook Page ID and Access Token are required but not configured.');
+        // Use v19.0 as a stable version
+        $response = Http::get('https://graph.facebook.com/v19.0/oauth/access_token', [
+            'grant_type' => 'fb_exchange_token',
+            'client_id' => $this->clientId,
+            'client_secret' => $this->clientSecret,
+            'fb_exchange_token' => $shortToken,
+        ]);
+
+        if ($response->failed()) {
+            throw new Exception('Facebook Token Exchange Failed: ' . $response->body());
         }
 
-        $url = "https://graph.facebook.com/{$this->graphVersion}/{$this->pageId}/feed";
+        return $response->json()['access_token'];
+    }
 
-        try {
-            $response = Http::withOptions([
-                'verify' => false,
-                'timeout' => 60,
-                'connect_timeout' => 60,
-                'force_ip_resolve' => 'v4',
-            ])->post($url, [
-                'message' => $content,
-                'access_token' => $this->accessToken,
-            ]);
+    /**
+     * Fetch all pages with their tokens using the Long-Lived User Token
+     */
+    public function getPages(string $userAccessToken): array
+    {
+        $response = Http::get('https://graph.facebook.com/v19.0/me/accounts', [
+            'access_token' => $userAccessToken,
+            'limit' => 1000, // Fetch up to 1000 pages
+        ]);
 
-            if ($response->failed()) {
-                $errorData = $response->json();
-                $errorMessage = $errorData['error']['message'] ?? 'Unknown Facebook API Error';
-                Log::channel('facebook')->error('Facebook API Error: ' . $errorMessage, ['response' => $errorData]);
-                throw new Exception("Facebook API failed: " . $errorMessage);
-            }
-
-            $data = $response->json();
-
-            if (!isset($data['id'])) {
-                Log::channel('facebook')->error('Facebook API response missing ID', ['response' => $data]);
-                throw new Exception('Invalid response from Facebook API: ID not found.');
-            }
-
-            return $data['id'];
-
-        } catch (Exception $e) {
-            Log::channel('facebook')->error('FacebookService Exception: ' . $e->getMessage());
-            throw $e;
+        if ($response->failed()) {
+            throw new Exception('Fetch Pages Failed: ' . $response->body());
         }
+
+        // Return array of pages (id, name, access_token...)
+        return $response->json()['data'] ?? [];
     }
 }
