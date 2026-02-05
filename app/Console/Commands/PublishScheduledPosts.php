@@ -70,13 +70,20 @@ class PublishScheduledPosts extends Command
 
             $content = $job->variant->final_content;
             $accessToken = $job->channel->access_token;
+            
+            // Check for Media Asset for this specific channel
+            $mediaAssets = json_decode($job->variant->media_assets ?? '[]', true);
+            $imagePath = $mediaAssets[$job->channel_id] ?? null;
 
-            if (empty($content)) {
-                throw new \Exception("Content is empty.");
+            if (!empty($imagePath) && file_exists($imagePath)) {
+                $this->info("Publishing with Image: " . basename($imagePath));
+                $fbPostId = $this->facebookService->publishPhotoToPage($accessToken, $content, $imagePath);
+            } else {
+                if (empty($content)) {
+                    throw new \Exception("Content is empty.");
+                }
+                $fbPostId = $this->facebookService->publishPostToPage($accessToken, $content);
             }
-
-            // Publish using the specific Page's Access Token
-            $fbPostId = $this->facebookService->publishPostToPage($accessToken, $content);
 
             $job->update([
                 'status' => 'PUBLISHED',

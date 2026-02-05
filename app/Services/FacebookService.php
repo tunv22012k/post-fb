@@ -69,4 +69,25 @@ class FacebookService
 
         return $response->json()['id']; // Returns "PageID_PostID"
     }
+    /**
+     * Publish photo to a specific Page
+     */
+    public function publishPhotoToPage(string $pageAccessToken, string $message, string $imagePath): string
+    {
+        // Use attach for file upload
+        $response = Http::withoutVerifying()
+            ->attach('source', file_get_contents($imagePath), basename($imagePath))
+            ->post("https://graph.facebook.com/v19.0/me/photos", [
+                'access_token' => $pageAccessToken,
+                'message' => $message,
+            ]);
+
+        if ($response->failed()) {
+            throw new Exception('Publish Photo to Page Failed: ' . $response->body());
+        }
+
+        // Returns "PostID" (or Photo ID, which acts as Post ID for feed)
+        $data = $response->json();
+        return $data['post_id'] ?? $data['id']; 
+    }
 }

@@ -25,12 +25,12 @@ class PostController extends Controller
              if ($user) Auth::login($user);
         }
 
-        $channelCount = DestinationChannel::where('user_id', Auth::id())->count();
-        if ($channelCount == 0) {
+        $channels = DestinationChannel::where('user_id', Auth::id())->get();
+        if ($channels->count() == 0) {
             return redirect()->route('dashboard')->with('error', 'Please connect Facebook pages first!');
         }
 
-        return view('posts.create', ['count' => $channelCount]);
+        return view('posts.create', ['channels' => $channels, 'count' => $channels->count()]);
     }
 
     /**
@@ -41,44 +41,107 @@ class PostController extends Controller
         $validated = $request->validate([
             'content' => 'required|string|min:10',
             'scheduled_at' => 'required|date|after:now',
+            'image' => 'nullable|image|max:5120', // Max 5MB
+            'distribution_config' => 'required|json', // New Payload
         ]);
 
         DB::beginTransaction();
         try {
+            $mediaPath = null;
+            if ($request->hasFile('image')) {
+                $file = $request->file('image');
+                $filename = time() . '_' . $file->getClientOriginalName();
+                $path = $file->storeAs('uploads', $filename, 'public'); 
+                $mediaPath = storage_path('app/public/' . $path);
+            }
+
             // 1. Create Master Article
             $master = MasterArticle::create([
                 'user_id' => Auth::id(),
                 'content' => $validated['content'],
-                'status' => 'PENDING',
+                'status' => 'PROCESSING',
                 'source_url' => $request->input('source_url'),
+                'media_path' => $mediaPath,
             ]);
 
-            // 2. Create Content Variant (Simplest flow: 1 variant = original)
-            $variant = ContentVariant::create([
-                'master_id' => $master->id,
-                'final_content' => $validated['content'], // In real app, AI modifies this
-                'source_type' => 'ORIGINAL',
-                'status' => 'APPROVED', // Skip review for demo
-            ]);
+            $configs = json_decode($request->input('distribution_config'), true);
+            $totalJobs = 0;
+            $totalVariants = 0;
 
-            // 3. Fan-out to all Channels (Multiplexing)
-            $channels = DestinationChannel::where('user_id', Auth::id())->get();
-            $jobsCount = 0;
+            foreach ($configs as $group) {
+                $channelIds = $group['channels'] ?? [];
+                if (empty($channelIds)) continue;
 
-            foreach ($channels as $channel) {
-                PublicationJob::create([
-                    'variant_id' => $variant->id,
-                    'channel_id' => $channel->id,
-                    'scheduled_at' => Carbon::parse($validated['scheduled_at']),
-                    'status' => 'QUEUED',
-                ]);
-                $jobsCount++;
+                $useAi = $group['use_ai'] ?? false;
+                $baseSchedule = Carbon::parse($validated['scheduled_at']);
+
+                if (!$useAi) {
+                    // BRANCH A: Direct Mode (Staging)
+                    // Create ONE variant for this group (Original content)
+                    $variant = ContentVariant::create([
+                        'master_id' => $master->id,
+                        'final_content' => $validated['content'],
+                        'source_type' => 'ORIGINAL',
+                        'status' => 'WAITING_REVIEW', // Pending Approval
+                        'media_assets' => null, // No watermark yet
+                    ]);
+                    $totalVariants++;
+
+                    foreach ($channelIds as $channelId) {
+                         PublicationJob::create([
+                            'variant_id' => $variant->id,
+                            'channel_id' => $channelId,
+                            'scheduled_at' => $baseSchedule,
+                            'status' => 'HOLD', // Staging
+                        ]);
+                        $totalJobs++;
+                    }
+                } else {
+                    // BRANCH B: AI Factory Mode (Unique Variants per Channel)
+                    /*
+                     * Requirement: 
+                     * "Nếu chọn 1 thể loại thì gen 1 thể loại đó ra nhiều bản AI khác nhau và không được trùng câu từ"
+                     * -> We generate a UNIQUE variant for EACH channel.
+                     * "Nếu chọn 2 thể loại thì tự random"
+                     * -> We distribute styles to channels.
+                     */
+                    
+                    $styles = $group['styles'] ?? ['KOL']; // Default
+                    if (empty($styles)) $styles = ['KOL'];
+                    
+                    // Shuffle styles for random distribution if styles > 1
+                    // But maybe we want consistent rotation? Let's shuffle once.
+                    shuffle($styles);
+                    
+                    $language = $group['language'] ?? 'vi';
+
+                    foreach ($channelIds as $index => $channelId) {
+                        // Assign Style (Round Robin)
+                        $style = $styles[$index % count($styles)];
+                        
+                        // Dispatch Unique Job
+                        // By passing a SINGLE channel ID to the job, we ensure this job generates a variant 
+                        // specifically for this channel.
+                        // Wait, GenerateVariantJob dispatch signature currently accepts array.
+                        // I will pass [channelId].
+                        
+                        \App\Jobs\GenerateVariantJob::dispatch(
+                             $master, 
+                             $style, 
+                             $baseSchedule,
+                             $language,
+                             [$channelId] // Target only this channel
+                        );
+                        $totalJobs++; // Approximate, actual job creation is async
+                        $totalVariants++;
+                    }
+                }
             }
 
             DB::commit();
 
             return redirect()->route('dashboard')
-                ->with('success', "Success! System created 1 Master Article, 1 Variant, and fan-out to {$jobsCount} scheduled jobs.");
+                ->with('success', "Success! Configured {$totalJobs} jobs across " . count($configs) . " groups. AI Agents are generating unique variants.");
 
         } catch (\Exception $e) {
             DB::rollBack();
