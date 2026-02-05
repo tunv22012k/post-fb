@@ -1,5 +1,19 @@
 # Conceptual Implementation Plan
 
+> **Yêu cầu bài toán**: Thiết kế hệ thống **Centralized Dashboard** để tự động hóa quy trình làm mới nội dung (AI Rewriting, Image Enhancement) và phân phối quy mô lớn lên **1000+ Facebook Fanpages** cùng các Website vệ tinh. Hệ thống cần đảm bảo tính ổn định (Reliability), xử lý bất đồng bộ (Async Queue) và quản lý tài nguyên hiệu quả.
+
+
+## 0. Tóm Tắt Giải Pháp (Executive Summary)
+
+Bản kế hoạch này đề xuất kiến trúc kỹ thuật cho hệ thống **Centralized Content Automation**, giải quyết bài toán vận hành **1000+ Facebook Pages** và website vệ tinh với độ ổn định cao.
+
+**Ba trụ cột cốt lõi của giải pháp:**
+1.  **AI-First Workflow**: Chuyển đổi quy trình sáng tạo nội dung từ thủ công sang mô hình "Content Factory" tự động hóa (AI Rewrite -> Auto-Design -> Publish).
+2.  **Resilient Architecture (Kiến trúc Bền bỉ)**: Sử dụng hệ thống hàng đợi phân tán (Distributed Queue) để đảm bảo độ tin cậy 99.9%, không mất bài đăng ngay cả khi API Facebook gặp sự cố.
+3.  **Secure Scalability**: Thiết kế hướng tới khả năng mở rộng hàng ngang (Horizontal Scaling) và bảo mật Token đa lớp, sẵn sàng cho khối lượng công việc Enterprise.
+
+---
+
 ## 1. Tổng Quan Kiến Trúc & Công Nghệ (Technical Stack)
 
 ### A. Đề Xuất Tech Stack (Full-Stack)
@@ -28,6 +42,12 @@
     *   **Rate Limiting**: Điều tiết tốc độ post bài tuân thủ chính sách Facebook (200 req/giờ).
     *   **Async Processing (Decoupling)**: Tách rời các tác vụ nặng (AI Rewrite, Image Gen) chạy ngầm để không làm treo Dashboard (Non-blocking UI).
     *   **Reliability**: Đảm bảo an toàn dữ liệu với cơ chế Retry (tự động thử lại khi lỗi mạng) và Dead Letter Queue (lưu trữ job lỗi để xử lý sau).
+
+#### 6. Storage: AWS S3 + CloudFront (CDN)
+*   **Vai trò trong dự án**: Kho lưu trữ vĩnh viễn cho hàng triệu ảnh/video đã generate và được upload.
+*   **Mục đích sử dụng**: 
+    *   **Offload Heavy Traffic**: Toàn bộ lưu lượng tải ảnh/video sẽ đi qua CDN, không đi qua Server ứng dụng, giúp Server rảnh tay xử lý logic API.
+    *   **Scalability**: Để mở rộng storage không giới hạn. Nếu lưu trên ổ cứng server (Local Disk) thì sẽ rất nhanh đầy khi chạy AI số lượng lớn, nên việc dùng S3 là bắt buộc để hệ thống scale được về lâu dài.
 
 ### B. Quan Hệ Dữ Liệu & Sơ Đồ Database (Detailed Schema)
 
@@ -179,16 +199,20 @@ Hệ thống sử dụng mô hình **Distributed Queue (Redis)** để chịu t�
 *   **Monitoring (Laravel Horizon)**:
     *   Dashboard theo dõi thời gian thực: Tốc độ xử lý (Throughput), Job thất bại. Tự động Auto-scale số lượng Workers đưa vào lượng job tồn đọng (Queue backlog).
 
-### B. Giám Sát Dành Cho Người Dùng (Non-Technical Monitoring)
-*   **Xây dựng giao diện Quản lý Bài Viết**:
-    *   Xây dựng màn hình tập trung để Admin dễ dàng kiểm soát tình hình bài viết của toàn bộ các Pages.
-    *   Sử dụng mã màu trạng thái bài viết (Xanh=Thành công, Vàng=Đang xử lý, Đỏ=Lỗi) giúp nhận diện rủi ro nếu có lỗi.
-    *   Hiển thị danh sách các Page bị ngắt kết nối với nút bấm **"Reconnect Facebook"** để sửa lỗi nhanh.
-*   **Thông báo lỗi**:
-    *   Biểu tượng chuông báo trên góc màn hình: "Bài viết #123 thất bại trên 5 Page. Lý do: Ảnh quá khổ".
-    *   **Email Report**: Gửi báo cáo tổng hợp vào 8:00 sáng mỗi ngày cho Quản lý ("Hôm qua: 980 bài thành công, 20 bài lỗi").
-*   **Kênh Kỹ thuật**:
-    *   Tích hợp Zalo/Slack,... Bot để báo lỗi hệ thống 500/Timeout cho đội Dev.
+### B. Dashboard "Sức Khỏe" Hệ Thống (System Health Monitor)
+*   **Widget Đèn Báo Trạng Thái (Traffic Light Model)**:
+    *   Thiết kế một Widget "Status Center" ngay trang chủ Dashboard, sử dụng ngôn ngữ đèn giao thông đơn giản. **Dashboard sẽ nói cho User biết phải làm gì, thay vì chỉ báo lỗi**:
+        *   🟢 **Xanh (Tốt)**: "Hệ thống đang chạy ổn định". Tốc độ đăng bài bình thường (~50 bài/phút). Không cần thao tác gì thêm.
+        *   🟡 **Vàng (Cần Chú Ý)**: "Sắp có sự cố". Ví dụ: *03 Fanpage cần gia hạn kết nối trong tuần tới*. User nên chuẩn bị login lại, nhưng việc đăng bài hiện tại chưa bị ảnh hưởng.
+        *   🔴 **Đỏ (Nguy Hiểm - Cần Xử Lý Ngay)**: "Đang bị lỗi đăng bài!". Ví dụ: *Mất kết nối tới Website A* hoặc *Facebook chặn tạm thời*. Hệ thống sẽ hiện nút **"Fix Now"** (Sửa Ngay) để hướng dẫn User cách khắc phục cụ thể.
+*   **Giám Sát Kết Nối Thời Gian Thực (Connectivity Check)**:
+    *   **Heartbeat Mechanism**: Hệ thống chạy job ngầm cứ 5 phút/lần tự động "ping" thử tới các Website vệ tinh và gửi request kiểm tra Token Facebook.
+    *   **Instant Alert**: Nếu Website vệ tinh bị "Sập" (Down), Dashboard sẽ hiện ngay cảnh báo: *"Website A.com đang không truy cập được"* để User biết (tránh đổ lỗi cho tool đăng bài lỗi).
+*   **Báo Cáo Sự Cố Thân Thiện**:
+    *   Thay vì báo lỗi "Error 503 Service Unavailable", Dashboard sẽ hiển thị: *"Facebook đang bảo trì, hệ thống sẽ tự động thử lại sau 15 phút"*.
+    *   Sử dụng **Email/Zalo Report** gửi tổng hợp vào 8:00 sáng: *"Hệ thống đã tự động Recover 50 bài lỗi mạng, hiện còn 2 Page cần bạn kết nối lại"*.
+*   **Kênh Kỹ thuật (Dev Only)**:
+    *   Tích hợp Slack/Telegram Bot để báo lỗi chi tiết (Stack trace) cho đội Dev xử lý các lỗi 500 nội bộ.
 
 ### C. Bảo Mật (Security - The Vault)
 *   **Mã Hóa Đa Lớp (Encryption at Rest)**:
@@ -232,48 +256,48 @@ Hệ thống sử dụng mô hình **Distributed Queue (Redis)** để chịu t�
 stateDiagram-v2
     direction LR
     
-    %% Khởi tạo
+    %% Initialization
     state "User Input" as Input
     [*] --> Input
     
-    %% Nút quyết định rẽ nhánh
-    state "Có dùng AI không?" as Decision <<choice>>
+    %% Decision Point
+    state "Use AI?" as Decision <<choice>>
     Input --> Decision
     
-    %% Nhánh xử lý
-    Decision --> Staging: Không (Direct)
-    Decision --> AI_Factory: Có (AI Mode)
+    %% Processing Branches
+    Decision --> Staging: No (Direct)
+    Decision --> AI_Factory: Yes (AI Mode)
     
     state "Content Factory" as AI_Factory {
-        Gen_Text --> Gen_Image: Tạo Prompt ảnh
-        Gen_Image --> Staging: Hoàn tất
+        Gen_Text --> Gen_Image: Generate Image Prompt
+        Gen_Image --> Staging: Completed
     }
 
-    %% Vòng lặp duyệt bài
+    %% Review Loop
     state "Review Zone (Staging)" as Review {
         Staging --> Admin_Action
         
         state "Admin Decision" as Admin_Action <<choice>>
-        Admin_Action --> Edit_Mode: Admin tự sửa
-        Edit_Mode --> Staging: Lưu thay đổi
+        Admin_Action --> Edit_Mode: Admin Edits
+        Edit_Mode --> Staging: Save Changes
 
-        Admin_Action --> Request_Changes: Yêu cầu User sửa
-        Request_Changes --> Staging: User gửi lại
+        Admin_Action --> Request_Changes: Request User Revision
+        Request_Changes --> Staging: User Resubmits
         
-        Admin_Action --> Rejected: Từ chối (End)
-        Admin_Action --> Queued: Duyệt (Approve)
+        Admin_Action --> Rejected: Reject (End)
+        Admin_Action --> Queued: Approve
     }
 
-    %% Khu vực phân phối
+    %% Distribution Zone
     state "Distribution System" as Dist {
-        Queued --> Dispatching: Đến giờ (Cron)
+        Queued --> Dispatching: Scheduled Time (Cron)
         Dispatching --> Published: Webhook 200 OK
-        Dispatching --> Failed: Lỗi API
+        Dispatching --> Failed: API Error
         Failed --> Queued: Auto Retry
     }
 
-    %% Trạng thái kết thúc
-    state "Hoàn tất & Lưu trữ" as Finish
+    %% Final State
+    state "Finish & Archive" as Finish
     Published --> Finish
     Rejected --> Finish
 ```
